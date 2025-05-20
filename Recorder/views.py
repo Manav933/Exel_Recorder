@@ -242,111 +242,132 @@ def invoice_detail(request, pk):
 @login_required(login_url='Recorder:login')
 def generate_excel(request):
     """Generate Excel file for the current month or specified month"""
-    # Get month from form or use current month
-    month_filter = request.GET.get('month')
-    if not month_filter:
-        month_filter = timezone.now().strftime('%Y-%m')
-    
-    month, year = month_filter.split('-')
-    
-    # Get invoices for the specified month for the current user
-    invoices = Invoice.objects.filter(
-        user=request.user,
-        created_at__year=year, 
-        created_at__month=month
-    ).order_by('invoice_date')
-    
-    if not invoices:
-        messages.warning(request, f'No invoices found for {calendar.month_name[int(month)]} {year}')
-        return redirect('Recorder:invoice_list')
-    
-    # Create Excel file
     try:
-        # Include user ID in filename to keep files separate
-        excel_path = os.path.join(settings.INVOICE_EXCEL_DIR, f'invoices_{year}-{month}_{request.user.id}.xlsx')
+        # Get month from form or use current month
+        month_filter = request.GET.get('month')
+        if not month_filter:
+            month_filter = timezone.now().strftime('%Y-%m')
         
-        # Create Excel workbook
-        workbook = xlsxwriter.Workbook(excel_path)
-        worksheet = workbook.add_worksheet('Invoices')
+        try:
+            year, month = month_filter.split('-')
+            month_num = int(month)
+            if not (1 <= month_num <= 12):
+                raise ValueError("Invalid month number")
+        except (ValueError, IndexError):
+            messages.error(request, "Invalid month format. Please use YYYY-MM format.")
+            return redirect('Recorder:invoice_list')
         
-        # Add header formatting
-        header_format = workbook.add_format({
-            'bold': True,
-            'bg_color': '#4472C4',
-            'color': 'white',
-            'border': 1,
-            'align': 'center',
-        })
+        # Get invoices for the specified month for the current user
+        invoices = Invoice.objects.filter(
+            user=request.user,
+            created_at__year=year, 
+            created_at__month=month
+        ).order_by('invoice_date')
         
-        # Define columns
-        columns = [
-            'Firm', 'Quality', 'Invoice Date', 'Invoice Number', 'Party', 
-            'Total Amount', 'Due Date', 'Balance', 'Payment Date 1', 
-            'Payment 1', 'Dhara Day', 'Taka', 'Payment Date 2', 'Payment 2'
-        ]
+        if not invoices:
+            month_name = calendar.month_name[month_num]
+            messages.warning(request, f'No invoices found for {month_name} {year}')
+            return redirect('Recorder:invoice_list')
         
-        # Write headers
-        for col_num, column_title in enumerate(columns):
-            worksheet.write(0, col_num, column_title, header_format)
-        
-        # Row styling
-        date_format = workbook.add_format({'num_format': 'yyyy-mm-dd'})
-        money_format = workbook.add_format({'num_format': '#,##0.00'})
-        
-        def date_to_datetime(d):
-            """Convert date object to datetime object"""
-            if isinstance(d, date):
-                return datetime.combine(d, datetime.min.time())
-            return d
-        
-        # Write data rows
-        for row_num, invoice in enumerate(invoices, 1):
-            worksheet.write(row_num, 0, invoice.firm)
-            worksheet.write(row_num, 1, invoice.quality)
-            worksheet.write_datetime(row_num, 2, date_to_datetime(invoice.invoice_date), date_format)
-            worksheet.write(row_num, 3, invoice.invoice_number)
-            worksheet.write(row_num, 4, invoice.party)
-            worksheet.write_number(row_num, 5, float(invoice.total_amount), money_format)
-            worksheet.write_datetime(row_num, 6, date_to_datetime(invoice.due_date), date_format)
-            worksheet.write_number(row_num, 7, float(invoice.balance), money_format)
-            worksheet.write_datetime(row_num, 8, date_to_datetime(invoice.payment_date_1), date_format)
-            worksheet.write_number(row_num, 9, float(invoice.payment_1), money_format)
-            worksheet.write_number(row_num, 10, invoice.dhara_day)
-            worksheet.write_number(row_num, 11, float(invoice.taka), money_format)
-            if invoice.payment_date_2:
-                worksheet.write_datetime(row_num, 12, date_to_datetime(invoice.payment_date_2), date_format)
-            else:
-                worksheet.write(row_num, 12, '')  # Write empty cell if payment_date_2 is None
-            worksheet.write_number(row_num, 13, float(invoice.payment_2 or 0), money_format)
-        
-        # Add summary row
-        total_row = row_num + 2
-        worksheet.write(total_row, 4, 'TOTAL:', header_format)
-        worksheet.write_formula(total_row, 5, f'=SUM(F2:F{row_num+1})', money_format)
-        worksheet.write_formula(total_row, 7, f'=SUM(H2:H{row_num+1})', money_format)
-        worksheet.write_formula(total_row, 9, f'=SUM(J2:J{row_num+1})', money_format)
-        worksheet.write_formula(total_row, 11, f'=SUM(L2:L{row_num+1})', money_format)
-        worksheet.write_formula(total_row, 13, f'=SUM(N2:N{row_num+1})', money_format)
-        
-        # Auto-size columns
-        for col_num, _ in enumerate(columns):
-            worksheet.set_column(col_num, col_num, 15)
-        
-        workbook.close()
-        
-        # Store in session that the file was generated
-        request.session[f'excel_generated_{year}-{month}'] = True
-        
-        # Record the last generated month
-        request.session['last_generated_month'] = f'{year}-{month}'
-        
-        messages.success(request, f'Excel file for {calendar.month_name[int(month)]} {year} generated successfully')
-        
-        # Redirect to download
-        return redirect('Recorder:download_excel', year_month=f'{year}-{month}')
-        
+        # Create Excel file
+        try:
+            # Ensure the directory exists
+            os.makedirs(settings.INVOICE_EXCEL_DIR, exist_ok=True)
+            
+            # Include user ID in filename to keep files separate
+            excel_path = os.path.join(settings.INVOICE_EXCEL_DIR, f'invoices_{year}-{month}_{request.user.id}.xlsx')
+            print(f"Attempting to create Excel file at: {excel_path}")
+            
+            # Create Excel workbook
+            workbook = xlsxwriter.Workbook(excel_path)
+            worksheet = workbook.add_worksheet('Invoices')
+            
+            # Add header formatting
+            header_format = workbook.add_format({
+                'bold': True,
+                'bg_color': '#4472C4',
+                'color': 'white',
+                'border': 1,
+                'align': 'center',
+            })
+            
+            # Define columns
+            columns = [
+                'Firm', 'Quality', 'Invoice Date', 'Invoice Number', 'Party', 
+                'Total Amount', 'Due Date', 'Balance', 'Payment Date 1', 
+                'Payment 1', 'Dhara Day', 'Taka', 'Payment Date 2', 'Payment 2'
+            ]
+            
+            # Write headers
+            for col_num, column_title in enumerate(columns):
+                worksheet.write(0, col_num, column_title, header_format)
+            
+            # Row styling
+            date_format = workbook.add_format({'num_format': 'yyyy-mm-dd'})
+            money_format = workbook.add_format({'num_format': '#,##0.00'})
+            
+            def date_to_datetime(d):
+                """Convert date object to datetime object"""
+                if isinstance(d, date):
+                    return datetime.combine(d, datetime.min.time())
+                return d
+            
+            # Write data rows
+            for row_num, invoice in enumerate(invoices, 1):
+                worksheet.write(row_num, 0, invoice.firm)
+                worksheet.write(row_num, 1, invoice.quality)
+                worksheet.write_datetime(row_num, 2, date_to_datetime(invoice.invoice_date), date_format)
+                worksheet.write(row_num, 3, invoice.invoice_number)
+                worksheet.write(row_num, 4, invoice.party)
+                worksheet.write_number(row_num, 5, float(invoice.total_amount), money_format)
+                worksheet.write_datetime(row_num, 6, date_to_datetime(invoice.due_date), date_format)
+                worksheet.write_number(row_num, 7, float(invoice.balance), money_format)
+                worksheet.write_datetime(row_num, 8, date_to_datetime(invoice.payment_date_1), date_format)
+                worksheet.write_number(row_num, 9, float(invoice.payment_1), money_format)
+                worksheet.write_number(row_num, 10, invoice.dhara_day)
+                worksheet.write_number(row_num, 11, float(invoice.taka), money_format)
+                if invoice.payment_date_2:
+                    worksheet.write_datetime(row_num, 12, date_to_datetime(invoice.payment_date_2), date_format)
+                else:
+                    worksheet.write(row_num, 12, '')  # Write empty cell if payment_date_2 is None
+                worksheet.write_number(row_num, 13, float(invoice.payment_2 or 0), money_format)
+            
+            # Add summary row
+            total_row = row_num + 2
+            worksheet.write(total_row, 4, 'TOTAL:', header_format)
+            worksheet.write_formula(total_row, 5, f'=SUM(F2:F{row_num+1})', money_format)
+            worksheet.write_formula(total_row, 7, f'=SUM(H2:H{row_num+1})', money_format)
+            worksheet.write_formula(total_row, 9, f'=SUM(J2:J{row_num+1})', money_format)
+            worksheet.write_formula(total_row, 11, f'=SUM(L2:L{row_num+1})', money_format)
+            worksheet.write_formula(total_row, 13, f'=SUM(N2:N{row_num+1})', money_format)
+            
+            # Auto-size columns
+            for col_num, _ in enumerate(columns):
+                worksheet.set_column(col_num, col_num, 15)
+            
+            workbook.close()
+            print(f"Excel file created successfully at: {excel_path}")
+            
+            # Store in session that the file was generated
+            request.session[f'excel_generated_{year}-{month}'] = True
+            
+            # Record the last generated month
+            request.session['last_generated_month'] = f'{year}-{month}'
+            
+            month_name = calendar.month_name[month_num]
+            messages.success(request, f'Excel file for {month_name} {year} generated successfully')
+            
+            # Redirect to download
+            return redirect('Recorder:download_excel', year_month=f'{year}-{month}')
+            
+        except Exception as e:
+            print(f"Error generating Excel file: {str(e)}")
+            messages.error(request, f'Error generating Excel: {str(e)}')
+            return redirect('Recorder:invoice_list')
+            
     except Exception as e:
-        messages.error(request, f'Error generating Excel: {str(e)}')
+        print(f"Error in generate_excel view: {str(e)}")
+        messages.error(request, f'Error in generate_excel view: {str(e)}')
         return redirect('Recorder:invoice_list')
 
 @login_required(login_url='Recorder:login')
@@ -354,7 +375,7 @@ def download_excel(request, year_month):
     """Download the Excel file for a specific month"""
     try:
         year, month = year_month.split('-')
-        file_path = os.path.join(settings.INVOICE_EXCEL_DIR, f'invoices_{year_month}.xlsx')
+        file_path = os.path.join(settings.INVOICE_EXCEL_DIR, f'invoices_{year}-{month}_{request.user.id}.xlsx')
         
         if not os.path.exists(file_path):
             # Try to generate the file if it doesn't exist
