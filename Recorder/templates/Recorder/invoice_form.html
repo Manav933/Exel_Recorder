@@ -1,0 +1,124 @@
+{% extends 'base.html' %}
+{% load crispy_forms_tags %}
+
+{% block title %}
+  {% if is_create %}New Invoice{% else %}Edit Invoice{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-10">
+            <div class="card shadow">
+                <div class="card-header bg-primary text-white">
+                    <h3 class="mb-0">
+                        {% if is_create %}
+                            <i class="bi bi-plus-circle"></i> Create New Invoice
+                        {% else %}
+                            <i class="bi bi-pencil"></i> Edit Invoice #{{ invoice.invoice_number }}
+                        {% endif %}
+                    </h3>
+                </div>
+                <div class="card-body">
+                    <form method="post" novalidate>
+                        {% csrf_token %}
+                        
+                        <div class="row">
+                            <!-- First column -->
+                            <div class="col-md-6">
+                                <h4 class="mb-3">Invoice Information</h4>
+                                {{ form.firm|as_crispy_field }}
+                                {{ form.quality|as_crispy_field }}
+                                {{ form.invoice_date|as_crispy_field }}
+                                {{ form.invoice_number|as_crispy_field }}
+                                {{ form.party|as_crispy_field }}
+                                {{ form.total_amount|as_crispy_field }}
+                                {{ form.due_date|as_crispy_field }}
+                            </div>
+                            
+                            <!-- Second column -->
+                            <div class="col-md-6">
+                                <h4 class="mb-3">Payment Details</h4>
+                                {{ form.balance|as_crispy_field }}
+                                {{ form.payment_date_1|as_crispy_field }}
+                                {{ form.payment_1|as_crispy_field }}
+                                {{ form.dhara_day|as_crispy_field }}
+                                {{ form.taka|as_crispy_field }}
+                                {{ form.payment_date_2|as_crispy_field }}
+                                
+                                <!-- Payment 2 will be calculated automatically -->
+                                <div id="payment2-preview" class="alert alert-info {% if not is_create %}d-block{% else %}d-none{% endif %}">
+                                    <strong>Calculated Payment 2:</strong> 
+                                    <span id="payment2-value">
+                                        {% if not is_create %}
+                                            {{ invoice.payment_2 }}
+                                        {% endif %}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="d-flex justify-content-between mt-4">
+                            <a href="{% url 'Recorder:invoice_list' %}" class="btn btn-secondary">
+                                <i class="bi bi-arrow-left"></i> Back to List
+                            </a>
+                            <div>
+                                {% if is_create %}
+                                <button type="submit" name="save_and_add" class="btn btn-info me-2">
+                                    <i class="bi bi-save"></i> Save & Add Another
+                                </button>
+                                {% endif %}
+                                <button type="submit" class="btn btn-success">
+                                    <i class="bi bi-save"></i> {% if is_create %}Create{% else %}Update{% endif %} Invoice
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Client-side calculation of Payment 2 for preview
+    document.addEventListener('DOMContentLoaded', function() {
+        function calculatePayment2() {
+            const paymentDate1 = new Date(document.querySelector('[name="payment_date_1"]').value);
+            const dueDate = new Date(document.querySelector('[name="due_date"]').value);
+            const dharaDay = parseInt(document.querySelector('[name="dhara_day"]').value);
+            const payment1 = parseFloat(document.querySelector('[name="payment_1"]').value);
+            
+            if (isNaN(paymentDate1) || isNaN(dueDate) || isNaN(dharaDay) || isNaN(payment1)) {
+                return;
+            }
+            
+            // Calculate days difference
+            const timeDiff = paymentDate1.getTime() - dueDate.getTime();
+            const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
+            
+            // Calculate Payment 2 based on the formula
+            let payment2;
+            if (dharaDay > daysDiff) {
+                const interestFactor = payment1 / 1.05 * 0.18 / 365 * daysDiff;
+                payment2 = payment1 - interestFactor;
+            } else {
+                payment2 = payment1;
+            }
+            
+            // Update preview
+            document.getElementById('payment2-value').textContent = payment2.toFixed(2);
+            document.getElementById('payment2-preview').classList.remove('d-none');
+        }
+        
+        // Add event listeners
+        const fields = ['payment_date_1', 'due_date', 'dhara_day', 'payment_1'];
+        fields.forEach(field => {
+            document.querySelector(`[name="${field}"]`).addEventListener('change', calculatePayment2);
+            document.querySelector(`[name="${field}"]`).addEventListener('input', calculatePayment2);
+        });
+    });
+</script>
+{% endblock %}
