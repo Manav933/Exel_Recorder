@@ -3,7 +3,7 @@ import csv
 import calendar
 from datetime import datetime, date
 import xlsxwriter
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpResponse, JsonResponse
 from django.contrib import messages
@@ -416,3 +416,167 @@ def settle_payment_2(request, pk):
         return redirect('Recorder:invoice_list')
     
     return redirect('Recorder:invoice_detail', pk=pk)
+
+def parse_indian_number(number_str):
+    """Convert Indian number format (e.g., 2,13,546.00) to Decimal."""
+    try:
+        # Remove all commas and convert to Decimal
+        return Decimal(number_str.replace(',', ''))
+    except (ValueError, InvalidOperation):
+        raise ValueError(f"Invalid number format: {number_str}. Expected format: 2,13,546.00")
+
+@login_required(login_url='Recorder:login')
+def invoice_csv_upload(request):
+    """Handle CSV file upload for creating multiple invoices"""
+    if request.method == 'POST':
+        print("POST request received for CSV upload")
+        if 'csv_file' not in request.FILES:
+            print("No file uploaded")
+            messages.error(request, 'No file uploaded')
+            return redirect('Recorder:invoice_csv_upload')
+            
+        csv_file = request.FILES['csv_file']
+        print(f"File received: {csv_file.name}")
+        if not csv_file.name.endswith('.csv'):
+            print("Invalid file type")
+            messages.error(request, 'Please upload a CSV file')
+            return redirect('Recorder:invoice_csv_upload')
+            
+        try:
+            # Read CSV file
+            print("Reading CSV file")
+            decoded_file = csv_file.read().decode('utf-8-sig').splitlines()  # Use utf-8-sig to handle BOM
+            reader = csv.DictReader(decoded_file)
+            
+            # Required fields
+            required_fields = [
+                'firm', 'quality', 'invoice_date', 'invoice_number', 'party',
+                'total_amount', 'due_date', 'balance', 'payment_date_1',
+                'payment_1', 'dhara_day', 'taka'
+            ]
+            
+            # Validate headers
+            print(f"CSV headers: {reader.fieldnames}")
+            if not all(field in reader.fieldnames for field in required_fields):
+                missing_fields = [field for field in required_fields if field not in reader.fieldnames]
+                print(f"Missing required fields: {missing_fields}")
+                messages.error(request, f'Missing required fields: {", ".join(missing_fields)}')
+                return redirect('Recorder:invoice_csv_upload')
+            
+            # Process each row
+            success_count = 0
+            error_count = 0
+            error_details = []
+            
+            for row_num, row in enumerate(reader, 1):
+                try:
+                    print(f"\nProcessing row {row_num}")
+                    print(f"Row data: {row}")
+                    
+                    # Validate required fields are not empty
+                    for field in required_fields:
+                        if not row.get(field):
+                            raise ValueError(f"Required field '{field}' is empty")
+                    
+                    # Convert date strings to date objects
+                    try:
+                        invoice_date = datetime.strptime(row['invoice_date'], '%Y-%m-%d').date()
+                    except ValueError:
+                        raise ValueError(f"Invalid invoice_date format: {row['invoice_date']}. Expected YYYY-MM-DD")
+                        
+                    try:
+                        due_date = datetime.strptime(row['due_date'], '%Y-%m-%d').date()
+                    except ValueError:
+                        raise ValueError(f"Invalid due_date format: {row['due_date']}. Expected YYYY-MM-DD")
+                        
+                    try:
+                        payment_date_1 = datetime.strptime(row['payment_date_1'], '%Y-%m-%d').date()
+                    except ValueError:
+                        raise ValueError(f"Invalid payment_date_1 format: {row['payment_date_1']}. Expected YYYY-MM-DD")
+                    
+                    # Handle optional payment_date_2
+                    payment_date_2 = None
+                    if row.get('payment_date_2'):
+                        try:
+                            payment_date_2 = datetime.strptime(row['payment_date_2'], '%Y-%m-%d').date()
+                        except ValueError:
+                            raise ValueError(f"Invalid payment_date_2 format: {row['payment_date_2']}. Expected YYYY-MM-DD")
+                    
+                    # Validate numeric fields using Indian number format
+                    try:
+                        total_amount = parse_indian_number(row['total_amount'])
+                    except ValueError as e:
+                        raise ValueError(str(e))
+                        
+                    try:
+                        balance = parse_indian_number(row['balance'])
+                    except ValueError as e:
+                        raise ValueError(str(e))
+                        
+                    try:
+                        payment_1 = parse_indian_number(row['payment_1'])
+                    except ValueError as e:
+                        raise ValueError(str(e))
+                        
+                    try:
+                        dhara_day = int(row['dhara_day'])
+                    except ValueError:
+                        raise ValueError(f"Invalid dhara_day: {row['dhara_day']}. Must be a valid integer")
+                        
+                    try:
+                        taka = parse_indian_number(row['taka'])
+                    except ValueError as e:
+                        raise ValueError(str(e))
+                    
+                    # Create invoice
+                    invoice = Invoice(
+                        user=request.user,
+                        firm=row['firm'],
+                        quality=row['quality'],
+                        invoice_date=invoice_date,
+                        invoice_number=row['invoice_number'],
+                        party=row['party'],
+                        total_amount=total_amount,
+                        due_date=due_date,
+                        balance=balance,
+                        payment_date_1=payment_date_1,
+                        payment_1=payment_1,
+                        dhara_day=dhara_day,
+                        taka=taka,
+                        payment_date_2=payment_date_2
+                    )
+                    
+                    # Calculate payment_2
+                    invoice.payment_2 = invoice.calculate_payment_2()
+                    
+                    # Save invoice
+                    invoice.save()
+                    success_count += 1
+                    print(f"Successfully saved invoice {invoice.invoice_number}")
+                    
+                except Exception as e:
+                    error_count += 1
+                    error_msg = f"Row {row_num}: {str(e)}"
+                    print(error_msg)
+                    error_details.append(error_msg)
+                    continue
+            
+            # Show results
+            if success_count > 0:
+                messages.success(request, f'Successfully imported {success_count} invoices')
+            if error_count > 0:
+                error_message = f'Failed to import {error_count} invoices. Errors:'
+                for error in error_details[:5]:  # Show first 5 errors
+                    error_message += f'\n{error}'
+                if len(error_details) > 5:
+                    error_message += f'\n... and {len(error_details) - 5} more errors'
+                messages.warning(request, error_message)
+            
+            return redirect('Recorder:invoice_list')
+            
+        except Exception as e:
+            print(f"Error processing CSV file: {str(e)}")
+            messages.error(request, f'Error processing CSV file: {str(e)}')
+            return redirect('Recorder:invoice_csv_upload')
+    
+    return render(request, 'Recorder/invoice_csv_upload.html')

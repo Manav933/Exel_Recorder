@@ -22,4 +22,5 @@ urlpatterns = [
     path('excel/download/<str:year_month>/', views.download_excel, name='download_excel'),
     path('invoice/<int:pk>/settle-payment-1/', views.settle_payment_1, name='settle_payment_1'),
     path('invoice/<int:pk>/settle-payment-2/', views.settle_payment_2, name='settle_payment_2'),
+    path('invoice/csv-upload/', views.invoice_csv_upload, name='invoice_csv_upload'),
 ]
