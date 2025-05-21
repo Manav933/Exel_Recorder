@@ -19,6 +19,7 @@ class Invoice(models.Model):
     taka = models.DecimalField(max_digits=15, decimal_places=2)
     payment_date_2 = models.DateField(null=True, blank=True)
     payment_2 = models.DecimalField(max_digits=15, decimal_places=2, null=True)
+    settled_payment_2 = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -30,8 +31,21 @@ class Invoice(models.Model):
         """Return month and year as a string for grouping invoices by month."""
         return self.created_at.strftime('%Y-%m')
     
+    @property
+    def payment_status(self):
+        """Return the payment settlement status of the invoice."""
+        if self.balance == 0 and self.settled_payment_2:
+            return 'both_settled'
+        elif self.balance == 0:
+            return 'payment_1_settled'
+        else:
+            return 'pending'
+    
     def calculate_payment_2(self):
         """Calculate payment 2 based on the formula."""
+        if self.settled_payment_2:
+            return Decimal('0.00')
+            
         if not all([self.payment_date_1, self.invoice_date, self.dhara_day, self.payment_1]):
             return 0
             
@@ -44,8 +58,8 @@ class Invoice(models.Model):
             return Decimal(interest_factor)
             
     def save(self, *args, **kwargs):
-        # Calculate payment_2 before saving
-        if not self.payment_2:
+        # Calculate payment_2 before saving if not settled
+        if not self.settled_payment_2:
             self.payment_2 = self.calculate_payment_2()
         super().save(*args, **kwargs)
     

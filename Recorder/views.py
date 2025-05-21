@@ -94,6 +94,16 @@ def invoice_list(request):
         year, month = month_filter.split('-')
         invoices = invoices.filter(created_at__year=year, created_at__month=month)
     
+    # Filter by payment status
+    payment_status = request.GET.get('payment_status')
+    if payment_status:
+        if payment_status == 'both_settled':
+            invoices = invoices.filter(balance=0, settled_payment_2=True)
+        elif payment_status == 'payment_1_settled':
+            invoices = invoices.filter(balance=0, settled_payment_2=False)
+        elif payment_status == 'pending':
+            invoices = invoices.filter(balance__gt=0)
+    
     # Paginate results
     paginator = Paginator(invoices, 10)  # Show 10 invoices per page
     page_number = request.GET.get('page')
@@ -106,6 +116,7 @@ def invoice_list(request):
         'page_obj': page_obj,
         'months': months,
         'current_month': month_filter,
+        'current_payment_status': payment_status,
     }
     return render(request, 'Recorder/invoice_list.html', context)
 
@@ -406,14 +417,17 @@ def settle_payment_1(request, pk):
 
 @login_required(login_url='Recorder:login')
 def settle_payment_2(request, pk):
-    """Handle Payment 2 settlement and invoice deletion"""
+    """Handle Payment 2 settlement"""
     invoice = get_object_or_404(Invoice, pk=pk, user=request.user)
     
     if request.method == 'POST':
-        # Delete the invoice
-        invoice.delete()
-        messages.success(request, 'Payment 2 has been settled and invoice has been deleted!')
-        return redirect('Recorder:invoice_list')
+        # Mark payment_2 as settled and set it to 0
+        invoice.settled_payment_2 = True
+        invoice.payment_2 = Decimal('0.00')
+        invoice.save()
+        
+        messages.success(request, 'Payment 2 has been settled successfully!')
+        return redirect('Recorder:invoice_detail', pk=pk)
     
     return redirect('Recorder:invoice_detail', pk=pk)
 

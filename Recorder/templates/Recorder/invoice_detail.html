@@ -122,7 +122,7 @@
                             </form>
                             <form method="post" action="{% url 'Recorder:settle_payment_2' invoice.pk %}" class="d-inline">
                                 {% csrf_token %}
-                                <button type="submit" class="btn btn-danger" onclick="return confirm('Are you sure you want to settle Payment 2? This will delete the invoice.')">
+                                <button type="submit" class="btn btn-danger" onclick="return confirm('Are you sure you want to settle Payment 2? This will set the payment amount to 0.')">
                                     <i class="bi bi-check-circle"></i> Settle Payment 2
                                 </button>
                             </form>
