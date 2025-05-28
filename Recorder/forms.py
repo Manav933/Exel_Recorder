@@ -37,16 +37,31 @@ class UserLoginForm(AuthenticationForm):
             field.widget.attrs['placeholder'] = field.label
 
 class InvoiceForm(forms.ModelForm):
-    invoice_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}))
-    due_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}))
-    payment_date_1 = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}))
-    payment_date_2 = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), required=False)
+    invoice_date = forms.DateField(
+        widget=forms.DateInput(attrs={'type': 'date', 'format': '%Y-%m-%d'}),
+        input_formats=['%Y-%m-%d']
+    )
+    due_date = forms.DateField(
+        widget=forms.DateInput(attrs={'type': 'date', 'format': '%Y-%m-%d'}),
+        input_formats=['%Y-%m-%d']
+    )
+    payment_date_1 = forms.DateField(
+        widget=forms.DateInput(attrs={'type': 'date', 'format': '%Y-%m-%d'}),
+        input_formats=['%Y-%m-%d'],
+        required=False
+    )
+    payment_date_2 = forms.DateField(
+        widget=forms.DateInput(attrs={'type': 'date', 'format': '%Y-%m-%d'}),
+        input_formats=['%Y-%m-%d'],
+        required=False
+    )
+    payment_1 = forms.DecimalField(max_digits=15, decimal_places=2, required=False)
     
     class Meta:
         model = Invoice
         fields = [
             'firm', 'quality', 'invoice_date', 'invoice_number', 
-            'party', 'total_amount', 'due_date', 'balance', 
+            'party', 'meter', 'total_amount', 'due_date', 'balance', 
             'payment_date_1', 'payment_1', 'dhara_day', 'taka', 
             'payment_date_2'
         ]
@@ -57,3 +72,5 @@ class InvoiceForm(forms.ModelForm):
         # Add Bootstrap classes to all form fields
         for field_name, field in self.fields.items():
             field.widget.attrs['class'] = 'form-control'
+            if isinstance(field, forms.DateField):
+                field.widget.attrs['data-date-format'] = 'yyyy-mm-dd'

@@ -97,6 +97,11 @@ TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
+# Date format settings
+DATE_FORMAT = 'm-d-Y'
+DATE_INPUT_FORMATS = ['%m-%d-%Y', '%m/%d/%Y', '%Y-%m-%d']
+SHORT_DATE_FORMAT = 'm-d-Y'
+
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
 STATICFILES_DIRS = [os.path.join(BASE_DIR, 'static')]
@@ -126,3 +131,8 @@ SESSION_SERIALIZER = 'django.contrib.sessions.serializers.JSONSerializer'
 # Custom settings for invoice app
 INVOICE_EXCEL_DIR = os.path.join(MEDIA_ROOT, 'invoice_excel')
 os.makedirs(INVOICE_EXCEL_DIR, exist_ok=True)
+
+# Ensure media files are served in development
+if DEBUG:
+    MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+    MEDIA_URL = '/media/'
