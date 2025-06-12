@@ -19,16 +19,66 @@
                         <a href="{% url 'Recorder:invoice_csv_upload' %}" class="btn btn-light btn-sm ms-2">
                             <i class="bi bi-file-earmark-arrow-up"></i> Upload CSV
                         </a>
+                        {% if current_month %}
+                        <a href="{% url 'Recorder:generate_csv' %}?month={{ current_month }}" class="btn btn-light btn-sm ms-2">
+                            <i class="bi bi-download"></i> Download CSV
+                        </a>
+                        {% endif %}
                     </div>
                 </div>
                 <div class="card-body">
+                    <!-- Summary Statistics -->
+                    <div class="row mb-4">
+                        <div class="col-12">
+                            <h5>Summary Statistics</h5>
+                            <div class="row g-3">
+                                <div class="col-md-3">
+                                    <div class="card bg-warning text-dark h-100">
+                                        <div class="card-body">
+                                            <h6 class="card-title">Pending Payments</h6>
+                                            <p class="card-text mb-0">Count: {{ summary_stats.pending_count }}</p>
+                                            <p class="card-text">Amount: ₹{{ summary_stats.pending_amount|floatformat:2 }}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="card bg-info text-dark h-100">
+                                        <div class="card-body">
+                                            <h6 class="card-title">Payment 1 Settled</h6>
+                                            <p class="card-text mb-0">Count: {{ summary_stats.payment_1_settled_count }}</p>
+                                            <p class="card-text">Amount: ₹{{ summary_stats.payment_1_settled_amount|floatformat:2 }}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="card bg-success text-white h-100">
+                                        <div class="card-body">
+                                            <h6 class="card-title">Both Payments Settled</h6>
+                                            <p class="card-text mb-0">Count: {{ summary_stats.both_settled_count }}</p>
+                                            <p class="card-text">Amount: ₹{{ summary_stats.both_settled_amount|floatformat:2 }}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <div class="card bg-primary text-white h-100">
+                                        <div class="card-body">
+                                            <h6 class="card-title">Total Balance Due</h6>
+                                            <p class="card-text">₹{{ summary_stats.total_balance|floatformat:2 }}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Filters -->
                     <div class="row mb-4">
-                        <div class="col-md-6">
-                            <h5>Filter by Month</h5>
-                            <div class="btn-group" role="group">
-                                <a href="{% url 'Recorder:invoice_list' %}" class="btn btn-outline-secondary {% if not current_month %}active{% endif %}">
-                                    All Months
+                        <div class="col-12">
+                            <h5>Filter by Invoice Date</h5>
+                            <div class="btn-group flex-wrap" role="group">
+                                <a href="{% url 'Recorder:invoice_list' %}" 
+                                   class="btn btn-outline-secondary {% if not current_month %}active{% endif %}">
+                                    All Dates
                                 </a>
                                 {% for month_year, month_name in months.items %}
                                 <a href="{% url 'Recorder:invoice_list' %}?month={{ month_year }}" 
@@ -38,26 +88,47 @@
                                 {% endfor %}
                             </div>
                         </div>
+                    </div>
+                    <div class="row mb-4">
                         <div class="col-md-6">
                             <h5>Filter by Payment Status</h5>
                             <div class="btn-group" role="group">
-                                <a href="{% url 'Recorder:invoice_list' %}{% if current_month %}?month={{ current_month }}{% endif %}" 
+                                <a href="{% url 'Recorder:invoice_list' %}{% if current_month %}?month={{ current_month }}{% endif %}{% if party_search %}&party_search={{ party_search }}{% endif %}" 
                                    class="btn btn-outline-secondary {% if not current_payment_status %}active{% endif %}">
                                     All
                                 </a>
-                                <a href="{% url 'Recorder:invoice_list' %}{% if current_month %}?month={{ current_month }}&{% else %}?{% endif %}payment_status=pending" 
+                                <a href="{% url 'Recorder:invoice_list' %}{% if current_month %}?month={{ current_month }}&{% else %}?{% endif %}payment_status=pending{% if party_search %}&party_search={{ party_search }}{% endif %}" 
                                    class="btn btn-outline-warning {% if current_payment_status == 'pending' %}active{% endif %}">
                                     Pending
                                 </a>
-                                <a href="{% url 'Recorder:invoice_list' %}{% if current_month %}?month={{ current_month }}&{% else %}?{% endif %}payment_status=payment_1_settled" 
+                                <a href="{% url 'Recorder:invoice_list' %}{% if current_month %}?month={{ current_month }}&{% else %}?{% endif %}payment_status=payment_1_settled{% if party_search %}&party_search={{ party_search }}{% endif %}" 
                                    class="btn btn-outline-info {% if current_payment_status == 'payment_1_settled' %}active{% endif %}">
                                     Payment 1 Settled
                                 </a>
-                                <a href="{% url 'Recorder:invoice_list' %}{% if current_month %}?month={{ current_month }}&{% else %}?{% endif %}payment_status=both_settled" 
+                                <a href="{% url 'Recorder:invoice_list' %}{% if current_month %}?month={{ current_month }}&{% else %}?{% endif %}payment_status=both_settled{% if party_search %}&party_search={{ party_search }}{% endif %}" 
                                    class="btn btn-outline-success {% if current_payment_status == 'both_settled' %}active{% endif %}">
                                     Both Settled
                                 </a>
                             </div>
+                        </div>
+                        <div class="col-md-6">
+                            <h5>Search by Party Name</h5>
+                            <form method="get" class="d-flex">
+                                {% if current_month %}<input type="hidden" name="month" value="{{ current_month }}">{% endif %}
+                                {% if current_payment_status %}<input type="hidden" name="payment_status" value="{{ current_payment_status }}">{% endif %}
+                                <div class="input-group">
+                                    <input type="text" name="party_search" class="form-control" placeholder="Enter party name..." value="{{ party_search }}">
+                                    <button type="submit" class="btn btn-primary">
+                                        <i class="bi bi-search"></i> Search
+                                    </button>
+                                    {% if party_search %}
+                                    <a href="{% url 'Recorder:invoice_list' %}{% if current_month %}?month={{ current_month }}{% endif %}{% if current_payment_status %}&payment_status={{ current_payment_status }}{% endif %}" 
+                                       class="btn btn-secondary">
+                                        <i class="bi bi-x"></i> Clear
+                                    </a>
+                                    {% endif %}
+                                </div>
+                            </form>
                         </div>
                     </div>
 
@@ -71,6 +142,7 @@
                                     <th>Date</th>
                                     <th>Party</th>
                                     <th>Firm</th>
+                                    <th>Meter</th>
                                     <th>Total Amount</th>
                                     <th>Balance</th>
                                     <th>Payment Status</th>
@@ -81,9 +153,10 @@
                                 {% for invoice in page_obj %}
                                 <tr>
                                     <td>{{ invoice.invoice_number }}</td>
-                                    <td>{{ invoice.invoice_date }}</td>
+                                    <td>{{ invoice.invoice_date|date:"m-d-Y" }}</td>
                                     <td>{{ invoice.party }}</td>
                                     <td>{{ invoice.firm }}</td>
+                                    <td>{{ invoice.meter }}</td>
                                     <td>{{ invoice.total_amount }}</td>
                                     <td>{{ invoice.balance }}</td>
                                     <td>
@@ -115,6 +188,7 @@
                     </div>
 
                     <!-- Pagination -->
+                    {% comment %}
                     {% if page_obj.has_other_pages %}
                     <nav aria-label="Page navigation" class="mt-4">
                         <ul class="pagination justify-content-center">
@@ -160,6 +234,7 @@
                         </ul>
                     </nav>
                     {% endif %}
+                    {% endcomment %}
 
                     {% else %}
                     <div class="alert alert-info">

@@ -10,15 +10,16 @@ class Invoice(models.Model):
     invoice_date = models.DateField()
     invoice_number = models.CharField(max_length=100)
     party = models.CharField(max_length=255)
+    meter = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     total_amount = models.DecimalField(max_digits=15, decimal_places=2)
     due_date = models.DateField()
     balance = models.DecimalField(max_digits=10, decimal_places=2)
-    payment_date_1 = models.DateField()
-    payment_1 = models.DecimalField(max_digits=15, decimal_places=2)
+    payment_date_1 = models.DateField(null=True, blank=True)
+    payment_1 = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     dhara_day = models.IntegerField()
     taka = models.DecimalField(max_digits=15, decimal_places=2)
     payment_date_2 = models.DateField(null=True, blank=True)
-    payment_2 = models.DecimalField(max_digits=15, decimal_places=2, null=True)
+    payment_2 = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     settled_payment_2 = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -47,7 +48,7 @@ class Invoice(models.Model):
             return Decimal('0.00')
             
         if not all([self.payment_date_1, self.invoice_date, self.dhara_day, self.payment_1]):
-            return 0
+            return None
             
         # Calculate days difference
         days_diff = (self.payment_date_1 - self.invoice_date).days
@@ -56,11 +57,12 @@ class Invoice(models.Model):
         if self.dhara_day < days_diff:
             interest_factor = (self.payment_1 / Decimal('1.05')) * (Decimal('0.0004931507') * (days_diff - self.dhara_day))
             return Decimal(interest_factor)
+        return None
             
     def save(self, *args, **kwargs):
         # Calculate payment_2 before saving if not settled
-        if not self.settled_payment_2:
-            self.payment_2 = self.calculate_payment_2()
+        # if not self.settled_payment_2:
+        #     self.payment_2 = self.calculate_payment_2()
         super().save(*args, **kwargs)
     
     def __str__(self):

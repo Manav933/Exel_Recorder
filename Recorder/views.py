@@ -2,7 +2,6 @@ import os
 import csv
 import calendar
 from datetime import datetime, date
-import xlsxwriter
 from decimal import Decimal, InvalidOperation
 from django.shortcuts import render, redirect, get_object_or_404
 from django.http import HttpResponse, JsonResponse
@@ -78,12 +77,12 @@ def invoice_list(request):
     Display all invoices with pagination and filtering options
     Allow generating and downloading monthly Excel files
     """
-    # Get all invoices ordered by created date for the current user
-    invoices = Invoice.objects.filter(user=request.user).order_by('-created_at')
+    # Get all invoices ordered by invoice date for the current user
+    invoices = Invoice.objects.filter(user=request.user).order_by('-invoice_date')
     
-    # Get unique months from invoices for filtering
+    # Get unique months from invoices for filtering based on invoice_date
     months = {}
-    for invoice in Invoice.objects.filter(user=request.user).dates('created_at', 'month'):
+    for invoice in Invoice.objects.filter(user=request.user).dates('invoice_date', 'month', order='DESC'):
         month_year = invoice.strftime('%Y-%m')
         month_name = invoice.strftime('%B %Y')
         months[month_year] = month_name
@@ -92,7 +91,31 @@ def invoice_list(request):
     month_filter = request.GET.get('month')
     if month_filter:
         year, month = month_filter.split('-')
-        invoices = invoices.filter(created_at__year=year, created_at__month=month)
+        invoices = invoices.filter(invoice_date__year=year, invoice_date__month=month)
+    
+    # Filter by party name if search term is provided
+    party_search = request.GET.get('party_search', '').strip()
+    if party_search:
+        invoices = invoices.filter(party__icontains=party_search)
+    
+    # Calculate summary statistics
+    all_invoices = invoices  # Store the current queryset before payment status filtering
+    total_balance = all_invoices.aggregate(Sum('balance'))['balance__sum'] or 0
+    
+    # Count and sum for different payment statuses
+    pending_invoices = all_invoices.filter(balance__gt=0)
+    payment_1_settled = all_invoices.filter(balance=0, settled_payment_2=False)
+    both_settled = all_invoices.filter(balance=0, settled_payment_2=True)
+    
+    summary_stats = {
+        'pending_count': pending_invoices.count(),
+        'pending_amount': pending_invoices.aggregate(Sum('balance'))['balance__sum'] or 0,
+        'payment_1_settled_count': payment_1_settled.count(),
+        'payment_1_settled_amount': payment_1_settled.aggregate(Sum('total_amount'))['total_amount__sum'] or 0,
+        'both_settled_count': both_settled.count(),
+        'both_settled_amount': both_settled.aggregate(Sum('total_amount'))['total_amount__sum'] or 0,
+        'total_balance': total_balance,
+    }
     
     # Filter by payment status
     payment_status = request.GET.get('payment_status')
@@ -105,18 +128,20 @@ def invoice_list(request):
             invoices = invoices.filter(balance__gt=0)
     
     # Paginate results
-    paginator = Paginator(invoices, 10)  # Show 10 invoices per page
-    page_number = request.GET.get('page')
-    page_obj = paginator.get_page(page_number)
+    # paginator = Paginator(invoices, 10)  # Show 10 invoices per page
+    # page_number = request.GET.get('page')
+    # page_obj = paginator.get_page(page_number)
     
     # Store current filter in session
     request.session['current_month_filter'] = month_filter
     
     context = {
-        'page_obj': page_obj,
+        'page_obj': invoices,
         'months': months,
         'current_month': month_filter,
         'current_payment_status': payment_status,
+        'summary_stats': summary_stats,
+        'party_search': party_search,
     }
     return render(request, 'Recorder/invoice_list.html', context)
 
@@ -207,13 +232,13 @@ def invoice_delete(request, pk):
         ).count()
         
         if remaining == 0:
-            # Clean up any monthly Excel file
+            # Clean up any monthly CSV file
             try:
-                excel_path = os.path.join(settings.INVOICE_EXCEL_DIR, f'invoices_{month_year}_{request.user.id}.xlsx')
-                if os.path.exists(excel_path):
-                    os.remove(excel_path)
+                csv_path = os.path.join(settings.INVOICE_EXCEL_DIR, f'invoices_{month_year}_{request.user.id}.csv')
+                if os.path.exists(csv_path):
+                    os.remove(csv_path)
             except Exception as e:
-                messages.error(request, f'Error cleaning up Excel file: {str(e)}')
+                messages.error(request, f'Error cleaning up CSV file: {str(e)}')
         
         return redirect('Recorder:invoice_list')
     
@@ -251,11 +276,13 @@ def invoice_detail(request, pk):
     return render(request, 'Recorder/invoice_detail.html', context)
 
 @login_required(login_url='Recorder:login')
-def generate_excel(request):
-    """Generate Excel file for the current month or specified month"""
+def generate_csv(request):
+    """Generate CSV file for the current month or specified month"""
     try:
         # Get month from form or use current month
         month_filter = request.GET.get('month')
+        print(f"Generating CSV for month: {month_filter}")
+        
         if not month_filter:
             month_filter = timezone.now().strftime('%Y-%m')
         
@@ -271,164 +298,190 @@ def generate_excel(request):
         # Get invoices for the specified month for the current user
         invoices = Invoice.objects.filter(
             user=request.user,
-            created_at__year=year, 
-            created_at__month=month
+            invoice_date__year=year, 
+            invoice_date__month=month
         ).order_by('invoice_date')
+        
+        print(f"Found {invoices.count()} invoices for {year}-{month}")
         
         if not invoices:
             month_name = calendar.month_name[month_num]
             messages.warning(request, f'No invoices found for {month_name} {year}')
             return redirect('Recorder:invoice_list')
         
-        # Create Excel file
-        try:
-            # Ensure the directory exists
-            os.makedirs(settings.INVOICE_EXCEL_DIR, exist_ok=True)
-            
-            # Include user ID in filename to keep files separate
-            excel_path = os.path.join(settings.INVOICE_EXCEL_DIR, f'invoices_{year}-{month}_{request.user.id}.xlsx')
-            print(f"Attempting to create Excel file at: {excel_path}")
-            
-            # Create Excel workbook
-            workbook = xlsxwriter.Workbook(excel_path)
-            worksheet = workbook.add_worksheet('Invoices')
-            
-            # Add header formatting
-            header_format = workbook.add_format({
-                'bold': True,
-                'bg_color': '#4472C4',
-                'color': 'white',
-                'border': 1,
-                'align': 'center',
-            })
-            
-            # Define columns
-            columns = [
-                'Firm', 'Quality', 'Invoice Date', 'Invoice Number', 'Party', 
-                'Total Amount', 'Due Date', 'Balance', 'Payment Date 1', 
-                'Payment 1', 'Dhara Day', 'Taka', 'Payment Date 2', 'Payment 2'
+        # Create the response object with CSV content type
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="invoices_{year}-{month}.csv"'
+        
+        # Create CSV writer
+        writer = csv.writer(response)
+        
+        # Define columns
+        columns = [
+            'Firm', 'Quality', 'Invoice Date', 'Invoice Number', 'Party', 
+            'Total Amount', 'Due Date', 'Balance', 'Payment Date 1', 
+            'Payment 1', 'Dhara Day', 'Taka', 'Payment Date 2', 'Payment 2', 'Meter'
+        ]
+        
+        # Write headers
+        writer.writerow(columns)
+        
+        # Initialize totals
+        total_amount = Decimal('0')
+        total_balance = Decimal('0')
+        total_payment_1 = Decimal('0')
+        total_taka = Decimal('0')
+        total_payment_2 = Decimal('0')
+        total_meter = Decimal('0')
+        
+        # Write data rows
+        for invoice in invoices:
+            row = [
+                invoice.firm,
+                invoice.quality,
+                invoice.invoice_date.strftime('%Y-%m-%d') if invoice.invoice_date else '',
+                invoice.invoice_number,
+                invoice.party,
+                str(invoice.total_amount),
+                invoice.due_date.strftime('%Y-%m-%d') if invoice.due_date else '',
+                str(invoice.balance),
+                invoice.payment_date_1.strftime('%Y-%m-%d') if invoice.payment_date_1 else '',
+                str(invoice.payment_1) if invoice.payment_1 else '',
+                str(invoice.dhara_day),
+                str(invoice.taka),
+                invoice.payment_date_2.strftime('%Y-%m-%d') if invoice.payment_date_2 else '',
+                str(invoice.payment_2) if invoice.payment_2 else '',
+                str(invoice.meter)
             ]
+            writer.writerow(row)
             
-            # Write headers
-            for col_num, column_title in enumerate(columns):
-                worksheet.write(0, col_num, column_title, header_format)
-            
-            # Row styling
-            date_format = workbook.add_format({'num_format': 'yyyy-mm-dd'})
-            money_format = workbook.add_format({'num_format': '#,##0.00'})
-            
-            def date_to_datetime(d):
-                """Convert date object to datetime object"""
-                if isinstance(d, date):
-                    return datetime.combine(d, datetime.min.time())
-                return d
-            
-            # Write data rows
-            for row_num, invoice in enumerate(invoices, 1):
-                worksheet.write(row_num, 0, invoice.firm)
-                worksheet.write(row_num, 1, invoice.quality)
-                worksheet.write_datetime(row_num, 2, date_to_datetime(invoice.invoice_date), date_format)
-                worksheet.write(row_num, 3, invoice.invoice_number)
-                worksheet.write(row_num, 4, invoice.party)
-                worksheet.write_number(row_num, 5, float(invoice.total_amount), money_format)
-                worksheet.write_datetime(row_num, 6, date_to_datetime(invoice.due_date), date_format)
-                worksheet.write_number(row_num, 7, float(invoice.balance), money_format)
-                worksheet.write_datetime(row_num, 8, date_to_datetime(invoice.payment_date_1), date_format)
-                worksheet.write_number(row_num, 9, float(invoice.payment_1), money_format)
-                worksheet.write_number(row_num, 10, invoice.dhara_day)
-                worksheet.write_number(row_num, 11, float(invoice.taka), money_format)
-                if invoice.payment_date_2:
-                    worksheet.write_datetime(row_num, 12, date_to_datetime(invoice.payment_date_2), date_format)
-                else:
-                    worksheet.write(row_num, 12, '')  # Write empty cell if payment_date_2 is None
-                worksheet.write_number(row_num, 13, float(invoice.payment_2 or 0), money_format)
-            
-            # Add summary row
-            total_row = row_num + 2
-            worksheet.write(total_row, 4, 'TOTAL:', header_format)
-            worksheet.write_formula(total_row, 5, f'=SUM(F2:F{row_num+1})', money_format)
-            worksheet.write_formula(total_row, 7, f'=SUM(H2:H{row_num+1})', money_format)
-            worksheet.write_formula(total_row, 9, f'=SUM(J2:J{row_num+1})', money_format)
-            worksheet.write_formula(total_row, 11, f'=SUM(L2:L{row_num+1})', money_format)
-            worksheet.write_formula(total_row, 13, f'=SUM(N2:N{row_num+1})', money_format)
-            
-            # Auto-size columns
-            for col_num, _ in enumerate(columns):
-                worksheet.set_column(col_num, col_num, 15)
-            
-            workbook.close()
-            print(f"Excel file created successfully at: {excel_path}")
-            
-            # Store in session that the file was generated
-            request.session[f'excel_generated_{year}-{month}'] = True
-            
-            # Record the last generated month
-            request.session['last_generated_month'] = f'{year}-{month}'
-            
-            month_name = calendar.month_name[month_num]
-            messages.success(request, f'Excel file for {month_name} {year} generated successfully')
-            
-            # Redirect to download
-            return redirect('Recorder:download_excel', year_month=f'{year}-{month}')
-            
-        except Exception as e:
-            print(f"Error generating Excel file: {str(e)}")
-            messages.error(request, f'Error generating Excel: {str(e)}')
-            return redirect('Recorder:invoice_list')
+            # Update totals
+            total_amount += invoice.total_amount or Decimal('0')
+            total_balance += invoice.balance or Decimal('0')
+            total_payment_1 += invoice.payment_1 or Decimal('0')
+            total_taka += invoice.taka or Decimal('0')
+            total_payment_2 += invoice.payment_2 or Decimal('0')
+            total_meter += invoice.meter or Decimal('0')
+        
+        # Write totals row
+        writer.writerow([
+            'Total', '', '', '', '',
+            str(total_amount),
+            '',
+            str(total_balance),
+            '',
+            str(total_payment_1),
+            '',
+            str(total_taka),
+            '',
+            str(total_payment_2),
+            str(total_meter)
+        ])
+        
+        print(f"CSV file generated successfully for {year}-{month}")
+        return response
             
     except Exception as e:
-        print(f"Error in generate_excel view: {str(e)}")
-        messages.error(request, f'Error in generate_excel view: {str(e)}')
+        print(f"Error in generate_csv view: {str(e)}")
+        messages.error(request, f'Error generating CSV: {str(e)}')
         return redirect('Recorder:invoice_list')
 
 @login_required(login_url='Recorder:login')
-def download_excel(request, year_month):
-    """Download the Excel file for a specific month"""
+def download_csv(request, year_month):
+    """Download the CSV file for a specific month"""
     try:
         year, month = year_month.split('-')
-        file_path = os.path.join(settings.INVOICE_EXCEL_DIR, f'invoices_{year}-{month}_{request.user.id}.xlsx')
+        file_path = os.path.join(settings.INVOICE_EXCEL_DIR, f'invoices_{year}-{month}_{request.user.id}.csv')
+        print(f"Attempting to download CSV file from: {file_path}")
         
         if not os.path.exists(file_path):
+            print(f"CSV file not found at: {file_path}")
             # Try to generate the file if it doesn't exist
-            return redirect('Recorder:generate_excel')
+            return redirect('Recorder:generate_csv')
         
-        with open(file_path, 'rb') as excel_file:
-            response = HttpResponse(excel_file.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-            response['Content-Disposition'] = f'attachment; filename="invoices_{year_month}.xlsx"'
+        with open(file_path, 'rb') as csv_file:
+            response = HttpResponse(csv_file.read(), content_type='text/csv')
+            response['Content-Disposition'] = f'attachment; filename="invoices_{year_month}.csv"'
+            print(f"Serving CSV file with filename: invoices_{year_month}.csv")
             return response
             
     except Exception as e:
-        messages.error(request, f'Error downloading Excel: {str(e)}')
+        print(f"Error downloading CSV: {str(e)}")
+        messages.error(request, f'Error downloading CSV: {str(e)}')
         return redirect('Recorder:invoice_list')
 
 @login_required(login_url='Recorder:login')
 def settle_payment_1(request, pk):
-    """Handle Payment 1 settlement"""
+    """Handle Payment 1 settlement with amount input"""
     invoice = get_object_or_404(Invoice, pk=pk, user=request.user)
-    
+
     if request.method == 'POST':
-        # Update balance by subtracting payment_1
-        invoice.balance -= invoice.payment_1
-        invoice.save()
-        messages.success(request, 'Payment 1 has been settled successfully!')
-        return redirect('Recorder:invoice_detail', pk=pk)
-    
+        try:
+            amount_str = request.POST.get('amount')
+            if not amount_str:
+                messages.error(request, 'Please enter an amount to settle for Payment 1.')
+                return redirect('Recorder:invoice_detail', pk=pk)
+
+            settle_amount = Decimal(amount_str)
+
+            if settle_amount <= 0:
+                messages.error(request, 'Please enter a positive amount.')
+                return redirect('Recorder:invoice_detail', pk=pk)
+
+            if settle_amount > invoice.balance:
+                messages.error(request, f'Settlement amount ({settle_amount}) cannot exceed current balance ({invoice.balance}).')
+                return redirect('Recorder:invoice_detail', pk=pk)
+
+            invoice.balance -= settle_amount
+            invoice.save()
+            messages.success(request, f'₹{settle_amount} has been settled for Payment 1. Remaining balance: ₹{invoice.balance}.')
+            return redirect('Recorder:invoice_detail', pk=pk)
+        except InvalidOperation:
+            messages.error(request, 'Invalid amount entered.')
+            return redirect('Recorder:invoice_detail', pk=pk)
+        except Exception as e:
+            messages.error(request, f'An error occurred: {e}')
+            return redirect('Recorder:invoice_detail', pk=pk)
+
     return redirect('Recorder:invoice_detail', pk=pk)
 
 @login_required(login_url='Recorder:login')
 def settle_payment_2(request, pk):
-    """Handle Payment 2 settlement"""
+    """Handle Payment 2 settlement with amount input"""
     invoice = get_object_or_404(Invoice, pk=pk, user=request.user)
-    
+
     if request.method == 'POST':
-        # Mark payment_2 as settled and set it to 0
-        invoice.settled_payment_2 = True
-        invoice.payment_2 = Decimal('0.00')
-        invoice.save()
-        
-        messages.success(request, 'Payment 2 has been settled successfully!')
-        return redirect('Recorder:invoice_detail', pk=pk)
-    
+        try:
+            amount_str = request.POST.get('amount')
+            if not amount_str:
+                messages.error(request, 'Please enter an amount to settle for Payment 2.')
+                return redirect('Recorder:invoice_detail', pk=pk)
+
+            settle_amount = Decimal(amount_str)
+
+            if settle_amount <= 0:
+                messages.error(request, 'Please enter a positive amount.')
+                return redirect('Recorder:invoice_detail', pk=pk)
+
+            if settle_amount > invoice.payment_2:
+                messages.error(request, f'Settlement amount ({settle_amount}) cannot exceed remaining Payment 2 amount ({invoice.payment_2}).')
+                return redirect('Recorder:invoice_detail', pk=pk)
+
+            invoice.payment_2 -= settle_amount
+            if invoice.payment_2 <= 0:
+                invoice.settled_payment_2 = True
+                invoice.payment_2 = Decimal('0.00') # Ensure it's exactly 0 if fully settled
+
+            invoice.save()
+            messages.success(request, f'₹{settle_amount} has been settled for Payment 2. Remaining Payment 2 amount: ₹{invoice.payment_2}.')
+            return redirect('Recorder:invoice_detail', pk=pk)
+        except InvalidOperation:
+            messages.error(request, 'Invalid amount entered.')
+            return redirect('Recorder:invoice_detail', pk=pk)
+        except Exception as e:
+            messages.error(request, f'An error occurred: {e}')
+            return redirect('Recorder:invoice_detail', pk=pk)
+
     return redirect('Recorder:invoice_detail', pk=pk)
 
 def parse_indian_number(number_str):
@@ -465,9 +518,11 @@ def invoice_csv_upload(request):
             # Required fields
             required_fields = [
                 'firm', 'quality', 'invoice_date', 'invoice_number', 'party',
-                'total_amount', 'due_date', 'balance', 'payment_date_1',
-                'payment_1', 'dhara_day', 'taka'
+                'meter', 'total_amount', 'due_date', 'balance', 'dhara_day', 'taka'
             ]
+            
+            # Optional fields
+            optional_fields = ['payment_date_1', 'payment_1', 'payment_date_2']
             
             # Validate headers
             print(f"CSV headers: {reader.fieldnames}")
@@ -492,7 +547,7 @@ def invoice_csv_upload(request):
                         if not row.get(field):
                             raise ValueError(f"Required field '{field}' is empty")
                     
-                    # Convert date strings to date objects
+                    # Convert date strings to date objects (YYYY-MM-DD format)
                     try:
                         invoice_date = datetime.strptime(row['invoice_date'], '%Y-%m-%d').date()
                     except ValueError:
@@ -503,10 +558,13 @@ def invoice_csv_upload(request):
                     except ValueError:
                         raise ValueError(f"Invalid due_date format: {row['due_date']}. Expected YYYY-MM-DD")
                         
-                    try:
-                        payment_date_1 = datetime.strptime(row['payment_date_1'], '%Y-%m-%d').date()
-                    except ValueError:
-                        raise ValueError(f"Invalid payment_date_1 format: {row['payment_date_1']}. Expected YYYY-MM-DD")
+                    # Handle optional payment_date_1
+                    payment_date_1 = None
+                    if row.get('payment_date_1'):
+                        try:
+                            payment_date_1 = datetime.strptime(row['payment_date_1'], '%Y-%m-%d').date()
+                        except ValueError:
+                            raise ValueError(f"Invalid payment_date_1 format: {row['payment_date_1']}. Expected YYYY-MM-DD")
                     
                     # Handle optional payment_date_2
                     payment_date_2 = None
@@ -527,10 +585,13 @@ def invoice_csv_upload(request):
                     except ValueError as e:
                         raise ValueError(str(e))
                         
-                    try:
-                        payment_1 = parse_indian_number(row['payment_1'])
-                    except ValueError as e:
-                        raise ValueError(str(e))
+                    # Handle optional payment_1
+                    payment_1 = None
+                    if row.get('payment_1'):
+                        try:
+                            payment_1 = parse_indian_number(row['payment_1'])
+                        except ValueError as e:
+                            raise ValueError(str(e))
                         
                     try:
                         dhara_day = int(row['dhara_day'])
@@ -539,6 +600,11 @@ def invoice_csv_upload(request):
                         
                     try:
                         taka = parse_indian_number(row['taka'])
+                    except ValueError as e:
+                        raise ValueError(str(e))
+
+                    try:
+                        meter = parse_indian_number(row['meter'])
                     except ValueError as e:
                         raise ValueError(str(e))
                     
@@ -550,6 +616,7 @@ def invoice_csv_upload(request):
                         invoice_date=invoice_date,
                         invoice_number=row['invoice_number'],
                         party=row['party'],
+                        meter=meter,
                         total_amount=total_amount,
                         due_date=due_date,
                         balance=balance,
